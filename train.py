@@ -204,6 +204,13 @@ def main(args):
 
     # Suppress verbose prints during model/data building
     with SuppressPrints():
+        try:
+            trainer = build_trainer(cfg)
+        except Exception:
+            pass
+
+    # Re-build if suppressed build failed (so error is visible)
+    if 'trainer' not in locals():
         trainer = build_trainer(cfg)
 
     if args.eval_only:

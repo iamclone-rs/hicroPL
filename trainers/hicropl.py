@@ -192,7 +192,7 @@ class CrossModalPromptLearner(nn.Module):
             ctx_vectors = torch.empty(n_ctx, ctx_dim, dtype=dtype)
             nn.init.normal_(ctx_vectors, std=0.02)
             prompt_prefix = " ".join(["X"] * n_ctx)
-        print(f"N_CTX: {n_ctx}, Prompt depth: {self.cross_prompts_depth}, Cross layer: {cross_layer}")
+        print(f"N_CTX: {n_ctx}, Prompt depth: {self.cross_prompts_depth}, Cross layer: {self.cross_layer}")
         self.ctx = nn.Parameter(ctx_vectors)
         # create deeper prompts by nn.ParameterList
         cross_prompts_text = nn.ParameterList([self.ctx] + [nn.Parameter(torch.empty(n_ctx, 512, dtype=dtype)) for _ in range(self.cross_prompts_depth - 1)])
