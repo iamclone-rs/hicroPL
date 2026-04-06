@@ -353,31 +353,34 @@ class CustomCLIP(nn.Module):
         self.logit_scale = clip_model.logit_scale
         self.dtype = clip_model.dtype
         self.lambd = cfg.TRAINER.HICROPL.LAMBD
+        self.teacher_ln_train = cfg.TRAINER.HICROPL.TEACHER_LN_TRAIN
 
     def forward(self, image, label=None):
         tokenized_prompts = self.tokenized_prompts
         logit_scale = self.logit_scale.exp()
 
-        # Teacher forward with only ln_pre/ln_post gradient (memory-efficient)
         zs_enc = self.prompt_learner.ZS_image_encoder
-        x = image.type(self.dtype)
-        with torch.no_grad():
-            x = zs_enc.conv1(x)
-            x = x.reshape(x.shape[0], x.shape[1], -1).permute(0, 2, 1)
-            x = torch.cat([zs_enc.class_embedding.to(x.dtype) + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device), x], dim=1)
-            x = x + zs_enc.positional_embedding.to(x.dtype)
-        # ln_pre with gradient
-        x = zs_enc.ln_pre(x)
-        with torch.no_grad():
-            x = x.permute(1, 0, 2)
-            x = zs_enc.transformer(x)
-            x = x.permute(1, 0, 2)
-        # ln_post with gradient
-        x = zs_enc.ln_post(x[:, 0, :])
-        with torch.no_grad():
-            if zs_enc.proj is not None:
-                x = x @ zs_enc.proj
-        image_features_fixed = x
+        if self.teacher_ln_train:
+            # Memory-efficient: only ln_pre/ln_post have gradient
+            x = image.type(self.dtype)
+            with torch.no_grad():
+                x = zs_enc.conv1(x)
+                x = x.reshape(x.shape[0], x.shape[1], -1).permute(0, 2, 1)
+                x = torch.cat([zs_enc.class_embedding.to(x.dtype) + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device), x], dim=1)
+                x = x + zs_enc.positional_embedding.to(x.dtype)
+            x = zs_enc.ln_pre(x)
+            with torch.no_grad():
+                x = x.permute(1, 0, 2)
+                x = zs_enc.transformer(x)
+                x = x.permute(1, 0, 2)
+            x = zs_enc.ln_post(x[:, 0, :])
+            with torch.no_grad():
+                if zs_enc.proj is not None:
+                    x = x @ zs_enc.proj
+            image_features_fixed = x
+        else:
+            with torch.no_grad():
+                image_features_fixed = zs_enc(image.type(self.dtype))
         image_features_fixed = image_features_fixed / image_features_fixed.norm(dim=-1, keepdim=True)
 
         # Compute the prompted image and text features
@@ -456,17 +459,17 @@ class HiCroPL(TrainerX):
 
         name_to_update = "prompt_learner"
 
+        teacher_ln_train = cfg.TRAINER.HICROPL.TEACHER_LN_TRAIN
+
         for name, param in self.model.named_parameters():
             if name_to_update not in name:
-                # Make sure that VPT prompts are updated
                 if "VPT" in name:
                     param.requires_grad_(True)
                 else:
                     param.requires_grad_(False)
             else:
                 if "ZS_image_encoder" in name:
-                    # Unfreeze LayerNorm in teacher branch
-                    if "ln_pre" in name or "ln_post" in name:
+                    if teacher_ln_train and ("ln_pre" in name or "ln_post" in name):
                         param.requires_grad_(True)
                     else:
                         param.requires_grad_(False)
