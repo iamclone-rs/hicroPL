@@ -358,9 +358,8 @@ class CustomCLIP(nn.Module):
         tokenized_prompts = self.tokenized_prompts
         logit_scale = self.logit_scale.exp()
 
-        with torch.no_grad():
-            image_features_fixed = self.prompt_learner.ZS_image_encoder(image.type(self.dtype))
-            image_features_fixed = image_features_fixed / image_features_fixed.norm(dim=-1, keepdim=True)
+        image_features_fixed = self.prompt_learner.ZS_image_encoder(image.type(self.dtype))
+        image_features_fixed = image_features_fixed / image_features_fixed.norm(dim=-1, keepdim=True)
 
         # Compute the prompted image and text features
         text_input, visual_ctx, cross_prompts_text_deeper, cross_prompts_visual_deeper = self.prompt_learner()
@@ -447,7 +446,11 @@ class HiCroPL(TrainerX):
                     param.requires_grad_(False)
             else:
                 if "ZS_image_encoder" in name:
-                    param.requires_grad_(False)
+                    # Unfreeze LayerNorm in teacher branch
+                    if "ln_pre" in name or "ln_post" in name:
+                        param.requires_grad_(True)
+                    else:
+                        param.requires_grad_(False)
 
 
         # Count trainable params
