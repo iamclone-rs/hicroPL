@@ -358,7 +358,26 @@ class CustomCLIP(nn.Module):
         tokenized_prompts = self.tokenized_prompts
         logit_scale = self.logit_scale.exp()
 
-        image_features_fixed = self.prompt_learner.ZS_image_encoder(image.type(self.dtype))
+        # Teacher forward with only ln_pre/ln_post gradient (memory-efficient)
+        zs_enc = self.prompt_learner.ZS_image_encoder
+        x = image.type(self.dtype)
+        with torch.no_grad():
+            x = zs_enc.conv1(x)
+            x = x.reshape(x.shape[0], x.shape[1], -1).permute(0, 2, 1)
+            x = torch.cat([zs_enc.class_embedding.to(x.dtype) + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device), x], dim=1)
+            x = x + zs_enc.positional_embedding.to(x.dtype)
+        # ln_pre with gradient
+        x = zs_enc.ln_pre(x)
+        with torch.no_grad():
+            x = x.permute(1, 0, 2)
+            x = zs_enc.transformer(x)
+            x = x.permute(1, 0, 2)
+        # ln_post with gradient
+        x = zs_enc.ln_post(x[:, 0, :])
+        with torch.no_grad():
+            if zs_enc.proj is not None:
+                x = x @ zs_enc.proj
+        image_features_fixed = x
         image_features_fixed = image_features_fixed / image_features_fixed.norm(dim=-1, keepdim=True)
 
         # Compute the prompted image and text features
