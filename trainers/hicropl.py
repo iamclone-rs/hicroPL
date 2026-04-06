@@ -361,22 +361,21 @@ class CustomCLIP(nn.Module):
 
         zs_enc = self.prompt_learner.ZS_image_encoder
         if self.teacher_ln_train:
-            # Memory-efficient: only ln_pre/ln_post have gradient
-            x = image.type(self.dtype)
+            # Only ln_post has gradient (flows back through proj → loss)
             with torch.no_grad():
+                x = image.type(self.dtype)
                 x = zs_enc.conv1(x)
                 x = x.reshape(x.shape[0], x.shape[1], -1).permute(0, 2, 1)
                 x = torch.cat([zs_enc.class_embedding.to(x.dtype) + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device), x], dim=1)
                 x = x + zs_enc.positional_embedding.to(x.dtype)
-            x = zs_enc.ln_pre(x)
-            with torch.no_grad():
+                x = zs_enc.ln_pre(x)
                 x = x.permute(1, 0, 2)
                 x = zs_enc.transformer(x)
                 x = x.permute(1, 0, 2)
+            # ln_post + proj WITH gradient
             x = zs_enc.ln_post(x[:, 0, :])
-            with torch.no_grad():
-                if zs_enc.proj is not None:
-                    x = x @ zs_enc.proj
+            if zs_enc.proj is not None:
+                x = x @ zs_enc.proj
             image_features_fixed = x
         else:
             with torch.no_grad():
@@ -469,7 +468,7 @@ class HiCroPL(TrainerX):
                     param.requires_grad_(False)
             else:
                 if "ZS_image_encoder" in name:
-                    if teacher_ln_train and ("ln_pre" in name or "ln_post" in name):
+                    if teacher_ln_train and "ln_post" in name:
                         param.requires_grad_(True)
                     else:
                         param.requires_grad_(False)
