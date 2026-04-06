@@ -1,9 +1,29 @@
 import argparse
+import os
+import sys
+import warnings
+
+# Suppress noisy warnings (TF/XLA, CUDA factory, etc.)
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+os.environ["GRPC_VERBOSITY"] = "ERROR"
+warnings.filterwarnings("ignore")
+
 import torch
 
-from dassl.utils import setup_logger, set_random_seed, collect_env_info
+from dassl.utils import setup_logger, set_random_seed
 from dassl.config import get_cfg_default
 from dassl.engine import build_trainer
+
+
+class SuppressPrints:
+    """Context manager to suppress stdout prints."""
+    def __enter__(self):
+        self._original_stdout = sys.stdout
+        sys.stdout = open(os.devnull, 'w')
+        return self
+    def __exit__(self, *args):
+        sys.stdout.close()
+        sys.stdout = self._original_stdout
 
 # custom
 import datasets.oxford_pets
@@ -31,17 +51,19 @@ import trainers.promptsrc
 import trainers.hicropl
 
 def print_args(args, cfg):
-    print("***************")
-    print("** Arguments **")
-    print("***************")
-    optkeys = list(args.__dict__.keys())
-    optkeys.sort()
-    for key in optkeys:
-        print("{}: {}".format(key, args.__dict__[key]))
-    print("************")
-    print("** Config **")
-    print("************")
-    print(cfg)
+    print("=" * 50)
+    print(f"Trainer:    {cfg.TRAINER.NAME}")
+    print(f"Backbone:   {cfg.MODEL.BACKBONE.NAME}")
+    print(f"Dataset:    {cfg.DATASET.NAME}")
+    print(f"Shots:      {cfg.DATASET.NUM_SHOTS}")
+    print(f"Subsample:  {cfg.DATASET.SUBSAMPLE_CLASSES}")
+    print(f"Seed:       {cfg.SEED}")
+    print(f"Epochs:     {cfg.OPTIM.MAX_EPOCH}")
+    print(f"Batch size: {cfg.DATALOADER.TRAIN_X.BATCH_SIZE}")
+    print(f"LR:         {cfg.OPTIM.LR}")
+    print(f"Eval only:  {args.eval_only}")
+    print(f"Output:     {cfg.OUTPUT_DIR}")
+    print("=" * 50)
 
 
 def reset_cfg(cfg, args):
@@ -172,7 +194,6 @@ def setup_cfg(args):
 def main(args):
     cfg = setup_cfg(args)
     if cfg.SEED >= 0:
-        print("Setting fixed seed: {}".format(cfg.SEED))
         set_random_seed(cfg.SEED)
     setup_logger(cfg.OUTPUT_DIR)
 
@@ -180,10 +201,10 @@ def main(args):
         torch.backends.cudnn.benchmark = True
 
     print_args(args, cfg)
-    print("Collecting env info ...")
-    print("** System info **\n{}\n".format(collect_env_info()))
 
-    trainer = build_trainer(cfg)
+    # Suppress verbose prints during model/data building
+    with SuppressPrints():
+        trainer = build_trainer(cfg)
 
     if args.eval_only:
         trainer.load_model(args.model_dir, epoch=args.load_epoch)

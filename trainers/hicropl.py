@@ -47,7 +47,7 @@ def load_clip_to_cpu_teacher(cfg, zero_shot_model=False):
     url = clip._MODELS[backbone_name]
     model_path = clip._download(url)
 
-    print(f"CLIP Teacher name is {backbone_name}")
+    print(f"Teacher: {backbone_name}")
 
     try:
         # loading JIT archive
@@ -192,9 +192,7 @@ class CrossModalPromptLearner(nn.Module):
             ctx_vectors = torch.empty(n_ctx, ctx_dim, dtype=dtype)
             nn.init.normal_(ctx_vectors, std=0.02)
             prompt_prefix = " ".join(["X"] * n_ctx)
-        print(f"HiCroPL design: Hierarchical Cross-modal Prompt Learning")
-        print(f'Initial text context: "{prompt_prefix}"')
-        print(f"Number of HiCroPL context words (tokens): {n_ctx}")
+        print(f"N_CTX: {n_ctx}, Prompt depth: {self.cross_prompts_depth}, Cross layer: {cross_layer}")
         self.ctx = nn.Parameter(ctx_vectors)
         # create deeper prompts by nn.ParameterList
         cross_prompts_text = nn.ParameterList([self.ctx] + [nn.Parameter(torch.empty(n_ctx, 512, dtype=dtype)) for _ in range(self.cross_prompts_depth - 1)])
@@ -237,7 +235,6 @@ class CrossModalPromptLearner(nn.Module):
         # text
         with open(f"gpt_file/{CoPrompt_dataset_name_mapping[cfg.DATASET.NAME]}_prompt.json") as f:
             gpt3_prompt = json.load(f)
-        print("\nGetting textual features as CLIP's classifier.")
         clip_weights = gpt_clip_classifier(
             classnames, gpt3_prompt, clip_model_temp, cfg.DATASET.NAME
         )
@@ -437,10 +434,8 @@ class HiCroPL(TrainerX):
             # CLIP's default precision is fp16
             clip_model.float()
 
-        print("Building custom CLIP")
         self.model = CustomCLIP(cfg, classnames, clip_model)
 
-        print("Turning off gradients in both the image and the text encoder")
         name_to_update = "prompt_learner"
 
         for name, param in self.model.named_parameters():
@@ -455,12 +450,9 @@ class HiCroPL(TrainerX):
                     param.requires_grad_(False)
 
 
-        # Double check
-        enabled = set()
-        for name, param in self.model.named_parameters():
-            if param.requires_grad:
-                enabled.add(name)
-        print(f"Parameters to be updated: {enabled}")
+        # Count trainable params
+        num_trainable = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        print(f"Trainable params: {num_trainable:,}")
 
         if cfg.MODEL.INIT_WEIGHTS:
             load_pretrained_weights(self.model, cfg.MODEL.INIT_WEIGHTS)
