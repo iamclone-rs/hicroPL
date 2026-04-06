@@ -454,7 +454,7 @@ class HiCroPL(TrainerX):
                     param.requires_grad_(False)
             else:
                 if "ZS_image_encoder" in name:
-                    if teacher_ln_train and ("ln_pre" in name or "ln_post" in name or "ln_1" in name or "ln_2" in name):
+                    if teacher_ln_train and "ln_pre" in name:
                         param.requires_grad_(True)
                     else:
                         param.requires_grad_(False)
