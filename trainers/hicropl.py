@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from torch.cuda.amp import GradScaler, autocast
+import torchvision.transforms as T
 
 from dassl.engine import TRAINER_REGISTRY, TrainerX
 from dassl.utils import load_pretrained_weights, load_checkpoint
@@ -355,17 +356,24 @@ class CustomCLIP(nn.Module):
         self.lambd = cfg.TRAINER.HICROPL.LAMBD
         self.teacher_ln_train = cfg.TRAINER.HICROPL.TEACHER_LN_TRAIN
 
+        # Augmentation for teacher branch — creates a different view
+        self.teacher_augment = T.Compose([
+            T.RandomResizedCrop(224, scale=(0.5, 1.0), interpolation=T.InterpolationMode.BICUBIC),
+            T.RandomHorizontalFlip(),
+        ])
+
     def forward(self, image, label=None):
         tokenized_prompts = self.tokenized_prompts
         logit_scale = self.logit_scale.exp()
 
+        # Teacher sees augmented view during training
         zs_enc = self.prompt_learner.ZS_image_encoder
+        image_teacher = self.teacher_augment(image) if self.training else image
         if self.teacher_ln_train:
-            # Full teacher forward WITH gradient (all LN layers trainable)
-            image_features_fixed = zs_enc(image.type(self.dtype))
+            image_features_fixed = zs_enc(image_teacher.type(self.dtype))
         else:
             with torch.no_grad():
-                image_features_fixed = zs_enc(image.type(self.dtype))
+                image_features_fixed = zs_enc(image_teacher.type(self.dtype))
         image_features_fixed = image_features_fixed / image_features_fixed.norm(dim=-1, keepdim=True)
 
         # Compute the prompted image and text features
