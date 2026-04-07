@@ -166,6 +166,9 @@ def extend_cfg(cfg):
     cfg.TRAINER.HICROPL.TEACHER_NAME = "ViT-L/14"
     cfg.TRAINER.HICROPL.LAMBD = 10.
     cfg.TRAINER.HICROPL.TEACHER_LN_TRAIN = False  # fine-tune LayerNorm in teacher branch
+    cfg.TRAINER.HICROPL.LAMBDA_STRUCT = 1.0  # inter-class structure preservation weight
+    cfg.TRAINER.HICROPL.LAMBDA_GAP = 1.0  # modality gap preservation weight
+    cfg.TRAINER.HICROPL.STRUCT_TAU = 0.05  # temperature for structure KL
     cfg.DATASET.SUBSAMPLE_CLASSES = "all"  # all, base or new
 
 

@@ -6,7 +6,6 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from torch.cuda.amp import GradScaler, autocast
-import torchvision.transforms as T
 
 from dassl.engine import TRAINER_REGISTRY, TrainerX
 from dassl.utils import load_pretrained_weights, load_checkpoint
@@ -355,25 +354,20 @@ class CustomCLIP(nn.Module):
         self.dtype = clip_model.dtype
         self.lambd = cfg.TRAINER.HICROPL.LAMBD
         self.teacher_ln_train = cfg.TRAINER.HICROPL.TEACHER_LN_TRAIN
-
-        # Augmentation for teacher branch — creates a different view
-        self.teacher_augment = T.Compose([
-            T.RandomResizedCrop(224, scale=(0.5, 1.0), interpolation=T.InterpolationMode.BICUBIC),
-            T.RandomHorizontalFlip(),
-        ])
+        self.lambda_struct = cfg.TRAINER.HICROPL.LAMBDA_STRUCT
+        self.lambda_gap = cfg.TRAINER.HICROPL.LAMBDA_GAP
+        self.struct_tau = cfg.TRAINER.HICROPL.STRUCT_TAU
 
     def forward(self, image, label=None):
         tokenized_prompts = self.tokenized_prompts
         logit_scale = self.logit_scale.exp()
 
-        # Teacher sees augmented view during training
         zs_enc = self.prompt_learner.ZS_image_encoder
-        image_teacher = self.teacher_augment(image) if self.training else image
         if self.teacher_ln_train:
-            image_features_fixed = zs_enc(image_teacher.type(self.dtype))
+            image_features_fixed = zs_enc(image.type(self.dtype))
         else:
             with torch.no_grad():
-                image_features_fixed = zs_enc(image_teacher.type(self.dtype))
+                image_features_fixed = zs_enc(image.type(self.dtype))
         image_features_fixed = image_features_fixed / image_features_fixed.norm(dim=-1, keepdim=True)
 
         # Compute the prompted image and text features
@@ -385,21 +379,46 @@ class CustomCLIP(nn.Module):
         image_features = image_features + image_features_fixed
         image_features = image_features / image_features.norm(dim=-1, keepdim=True)
         text_features = text_features / text_features.norm(dim=-1, keepdim=True)
-        text_features = text_features + self.prompt_learner.fixed_embeddings.half()
+        text_features_fixed = self.prompt_learner.fixed_embeddings
+        text_features = text_features + text_features_fixed.half()
         text_features = text_features / text_features.norm(dim=-1, keepdim=True)
         # prompted logits
         logits = logit_scale * image_features @ text_features.t()
 
         if self.prompt_learner.training:
+            # --- Original losses ---
             loss_cls = F.cross_entropy(logits, label)
-            text_features_fixed = self.prompt_learner.fixed_embeddings
             cos = torch.nn.CosineSimilarity(dim=1, eps=1e-07)
             score = cos(text_features, text_features_fixed)
             loss_distill_text = 1.0 - torch.mean(score)
             score = cos(image_features, image_features_fixed)
             loss_distill_image = 1.0 - torch.mean(score)
             loss_distill = loss_distill_text + loss_distill_image
-            return loss_cls + self.lambd * loss_distill
+
+            # --- #4: Inter-class structure preservation ---
+            # Preserve pairwise class relationships from frozen CLIP
+            tau = self.struct_tau
+            sim_learned = text_features @ text_features.t() / tau
+            sim_fixed = text_features_fixed @ text_features_fixed.t() / tau
+            loss_struct = F.kl_div(
+                F.log_softmax(sim_learned, dim=-1),
+                F.softmax(sim_fixed, dim=-1),
+                reduction='batchmean'
+            )
+
+            # --- #5: Modality gap preservation ---
+            # Preserve the geometric direction between image and text clusters
+            gap_learned = image_features.mean(dim=0) - text_features.mean(dim=0)
+            gap_fixed = image_features_fixed.mean(dim=0) - text_features_fixed.mean(dim=0)
+            gap_learned = gap_learned / gap_learned.norm()
+            gap_fixed = gap_fixed / gap_fixed.norm()
+            loss_gap = 1.0 - (gap_learned * gap_fixed).sum()
+
+            total_loss = (loss_cls
+                          + self.lambd * loss_distill
+                          + self.lambda_struct * loss_struct
+                          + self.lambda_gap * loss_gap)
+            return total_loss
         return logits
 
 
